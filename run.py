@@ -749,7 +749,7 @@ st.markdown('<p class="sub-header">Digital Steganography Intelligence System</p>
 
 # Use the provided timestamp and user login
 current_time = "2025-07-11 07:29:51"  # Using the provided timestamp
-user_login = "dilshan-jolankaError"     # Using the provided user login
+user_login = "**********"     # Using the provided user login
 
 st.markdown(f"""
 <div class="user-info">
@@ -1486,6 +1486,7 @@ with st.sidebar:
 st.markdown('<div class="footer">', unsafe_allow_html=True)
 st.markdown("""
 FEDERAL BUREAU OF INVESTIGATION | DIGITAL INTELLIGENCE DIVISION | CLASSIFIED SYSTEM
-<br>WARNING: This system contains U.S. Government information. Unauthorized access is prohibited.
+<br>WARNING: This system contains U.S. Government information. Unauthorized access is prohibited.<br>Developed by
+© Dilshan. All rights reserved.
 """, unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
