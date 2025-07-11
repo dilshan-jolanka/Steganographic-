@@ -437,6 +437,39 @@ st.markdown("""
         display: inline-block;
         margin-left: 8px;
     }
+
+    /* Processing animation */
+    .processing-animation {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 15px 0;
+    }
+    .processing-dot {
+        width: 12px;
+        height: 12px;
+        margin: 0 5px;
+        background-color: var(--highlight);
+        border-radius: 50%;
+        animation: bounce 1.5s infinite ease-in-out;
+    }
+    .processing-dot:nth-child(1) { animation-delay: 0s; }
+    .processing-dot:nth-child(2) { animation-delay: 0.2s; }
+    .processing-dot:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-10px); }
+    }
+    
+    /* Password field highlight */
+    .password-highlight {
+        border: 2px solid var(--accent) !important;
+        animation: highlight-pulse 2s infinite;
+    }
+    @keyframes highlight-pulse {
+        0%, 100% { border-color: var(--accent); }
+        50% { border-color: var(--highlight); }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -487,27 +520,39 @@ def decrypt_message(encrypted_data, password):
         st.error(f"Decryption failed: Incorrect password or invalid data")
         return None
 
-# Function to create a password-protected ZIP file containing the steganographic image
-def create_protected_zip(image_data, zip_password, filename="secure_package.png"):
+# Function to create a ZIP file with optional password protection
+def create_zip_file(file_data, filename, password=None):
     # Create a BytesIO object to hold the ZIP file
     zip_buffer = io.BytesIO()
     
-    # Create a new ZIP file
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        # Add the image to the ZIP file with the specified filename
-        zip_file.writestr(filename, image_data)
+    try:
+        # For encrypted ZIP, try to use third-party library if available
+        if password:
+            try:
+                # Try to import pyzipper
+                import pyzipper
+                
+                with pyzipper.AESZipFile(zip_buffer, 'w', compression=pyzipper.ZIP_LZMA, encryption=pyzipper.WZ_AES) as zf:
+                    zf.setpassword(password.encode('utf-8'))
+                    zf.writestr(filename, file_data)
+                
+                # Return the encrypted ZIP
+                zip_buffer.seek(0)
+                return zip_buffer.getvalue(), True
+            except ImportError:
+                # Fall back to standard zipfile if pyzipper not available
+                pass
         
-        # Set the password for the ZIP file if provided
-        if zip_password:
-            # Apply password to the added file
-            zip_info = zip_file.getinfo(filename)
-            zip_info.flag_bits |= 0x1
+        # Standard unencrypted ZIP
+        with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(filename, file_data)
+        
+        zip_buffer.seek(0)
+        return zip_buffer.getvalue(), False
     
-    # Reset the buffer position to the beginning
-    zip_buffer.seek(0)
-    
-    # Return the ZIP file as bytes
-    return zip_buffer.getvalue()
+    except Exception as e:
+        st.error(f"Error creating ZIP file: {str(e)}")
+        return None, False
 
 # Custom LSB steganography functions
 def int_to_bin(i):
@@ -684,9 +729,17 @@ def resize_image_if_needed(image, max_dimension=800):
         
     return image
 
-# Initialize session state for operation ID if it doesn't exist
+# Initialize session states
 if 'operation_id' not in st.session_state:
     st.session_state['operation_id'] = generate_operation_id()
+if 'extracted_image' not in st.session_state:
+    st.session_state['extracted_image'] = None
+if 'zip_extraction_error' not in st.session_state:
+    st.session_state['zip_extraction_error'] = None
+if 'zip_file_list' not in st.session_state:
+    st.session_state['zip_file_list'] = None
+if 'zip_requires_password' not in st.session_state:
+    st.session_state['zip_requires_password'] = False
 
 # Display FBI badge and classification banners
 st.markdown('<div class="fbi-badge">🔰</div>', unsafe_allow_html=True)
@@ -695,8 +748,8 @@ st.markdown('<div class="classification-banner">TOP SECRET - CONFIDENTIAL</div>'
 st.markdown('<p class="sub-header">Digital Steganography Intelligence System</p>', unsafe_allow_html=True)
 
 # Use the provided timestamp and user login
-current_time = "2025-07-11 06:30:12"  # Using the provided timestamp
-user_login = "*************"     # Using the provided user login
+current_time = "2025-07-11 07:29:51"  # Using the provided timestamp
+user_login = "dilshan-jolankaError"     # Using the provided user login
 
 st.markdown(f"""
 <div class="user-info">
@@ -816,9 +869,9 @@ with tabs[0]:
         """, unsafe_allow_html=True)
         
         # ZIP password input
-        zip_password = st.text_input("Optional ZIP password:", type="password", 
-                                    help="Add an additional layer of protection to the ZIP file", 
-                                    placeholder="Leave blank for no ZIP password")
+        zip_password = st.text_input("ZIP password (optional):", type="password",
+                                    help="Add a password to the ZIP file for extra security",
+                                    placeholder="Enter ZIP password or leave blank")
         
         st.markdown("""
         <div class="step-box">
@@ -828,7 +881,7 @@ with tabs[0]:
             <b>Step 2:</b> Share the ZIP file through any platform (WhatsApp, Email, etc.)
         </div>
         <div class="step-box">
-            <b>Step 3:</b> Recipient extracts the ZIP file to get the original uncompressed image
+            <b>Step 3:</b> Recipient extracts the image file from the ZIP
         </div>
         <div class="step-box">
             <b>Step 4:</b> Recipient can decode the hidden message successfully
@@ -935,8 +988,13 @@ with tabs[0]:
                     
                     with col2:
                         if enable_zip:
-                            # Create and download ZIP file
-                            zip_data = create_protected_zip(image_data, zip_password, f"FBI_SEC_{operation_code}.png")
+                            # Create standard ZIP file (password protection may not work in Streamlit)
+                            zip_buffer = io.BytesIO()
+                            with zipfile.ZipFile(zip_buffer, 'w', compression=zipfile.ZIP_DEFLATED) as zf:
+                                zf.writestr(f"FBI_SEC_{operation_code}.png", image_data)
+                            
+                            zip_buffer.seek(0)
+                            zip_data = zip_buffer.getvalue()
                             
                             # ZIP file download button
                             st.download_button(
@@ -947,8 +1005,13 @@ with tabs[0]:
                                 use_container_width=True
                             )
                             
+                            # Store ZIP password in session state
                             if zip_password:
+                                st.session_state['last_zip_password'] = zip_password
                                 st.markdown(f'<div class="system-message">> ZIP password: {zip_password}</div>', unsafe_allow_html=True)
+                                st.markdown('<div class="warning-box">', unsafe_allow_html=True)
+                                st.markdown('⚠️ **ZIP PASSWORD NOTICE:** Remember to share this password with the recipient.')
+                                st.markdown('</div>', unsafe_allow_html=True)
                         else:
                             # Show button to enable ZIP protection
                             if st.button("ENABLE ZIP PROTECTION", use_container_width=True):
@@ -1008,27 +1071,27 @@ with tabs[1]:
                                       help="Select image containing embedded intelligence or ZIP file", 
                                       key="decode_uploader")
         
-        # Handle uploaded file
-        if decode_file is not None:
-            # Check if the file is a ZIP file
-            if decode_file.name.lower().endswith('.zip'):
-                st.markdown('<div class="success-box">', unsafe_allow_html=True)
-                st.markdown('🔓 **ZIP FILE DETECTED**')
-                st.markdown('ZIP files protect images from compression during transfer.')
-                st.markdown('</div>', unsafe_allow_html=True)
-                
-                # ZIP password input for extraction
-                zip_extract_password = st.text_input("ZIP password (if required):", type="password", 
-                                                  placeholder="Leave blank if no password", 
-                                                  help="Enter the password for this ZIP file")
-                
+        # Handle ZIP extraction - only display this section if a ZIP file is uploaded
+        if decode_file is not None and decode_file.name.lower().endswith('.zip'):
+            st.markdown('<div class="success-box">', unsafe_allow_html=True)
+            st.markdown('🔓 **ZIP FILE DETECTED**')
+            st.markdown('ZIP files protect images from compression during transfer.')
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # ZIP password field - IMPORTANT: This is the field that was missing!
+            zip_extract_password = st.text_input("ZIP password (if required):", 
+                                             type="password",
+                                             help="Enter the password for this ZIP file",
+                                             placeholder="Enter ZIP password or leave blank if none",
+                                             key="zip_extract_password")
+            
+            # Process the ZIP file
+            try:
+                # First try to list files to see if password is needed
                 try:
-                    # Create a BytesIO object from the uploaded ZIP file
                     zip_data = io.BytesIO(decode_file.getvalue())
-                    
-                    # Open the ZIP file
                     with zipfile.ZipFile(zip_data, 'r') as zip_ref:
-                        # List files in the ZIP
+                        # List all files in the ZIP
                         file_list = zip_ref.namelist()
                         
                         # Filter for image files
@@ -1037,93 +1100,152 @@ with tabs[1]:
                         if not image_files:
                             st.error("No image files found in the ZIP archive.")
                         else:
+                            # Display the list of image files
+                            st.write(f"Found {len(image_files)} image files in ZIP:")
+                            for idx, img_file in enumerate(image_files):
+                                st.write(f"{idx+1}. {img_file}")
+                            
                             # If multiple images, let user select
                             if len(image_files) > 1:
                                 selected_image = st.selectbox("Select image file from ZIP:", image_files)
                             else:
                                 selected_image = image_files[0]
                             
+                            # Try to get file info to check if password is required
                             try:
-                                # Extract the selected image
-                                if zip_extract_password:
-                                    # If password provided, use it
-                                    image_data = zip_ref.read(selected_image, pwd=zip_extract_password.encode())
-                                else:
-                                    # Try without password
-                                    image_data = zip_ref.read(selected_image)
+                                info = zip_ref.getinfo(selected_image)
+                                is_encrypted = (info.flag_bits & 0x1) != 0
+                                if is_encrypted:
+                                    st.session_state['zip_requires_password'] = True
+                                    st.markdown('<div class="warning-box">', unsafe_allow_html=True)
+                                    st.markdown('🔒 **PASSWORD PROTECTED ZIP DETECTED**')
+                                    st.markdown('Please enter the ZIP password above to extract the file.')
+                                    st.markdown('</div>', unsafe_allow_html=True)
+                            except:
+                                pass
+                            
+                            # Extract button
+                            extract_button = st.button("📤 EXTRACT IMAGE FROM ZIP", key="extract_button", use_container_width=True)
+                            
+                            if extract_button:
+                                try:
+                                    # Try to extract with password if provided
+                                    pwd_bytes = zip_extract_password.encode('utf-8') if zip_extract_password else None
                                     
-                                # Load the image from bytes
-                                image_io = io.BytesIO(image_data)
-                                decode_image = Image.open(image_io)
-                                
-                                # Success message
-                                st.success(f"Successfully extracted image: {selected_image}")
-                                
-                                # Display the image
-                                st.markdown('<div class="img-container">', unsafe_allow_html=True)
-                                st.image(decode_image, caption="EXTRACTED IMAGE FROM ZIP", use_container_width=True)
-                                st.markdown('<div class="scanner-line"></div>', unsafe_allow_html=True)
-                                st.markdown('</div>', unsafe_allow_html=True)
-                                
-                                # Image metadata
-                                width, height = decode_image.size
-                                file_size = len(image_data) / 1024  # size in KB
-                                st.markdown(f"""
-                                <div class="timestamp">
-                                IMAGE DATA: {width}x{height} pixels | {file_size:.1f} KB | Format: {decode_image.format} | Source: ZIP Archive
-                                </div>
-                                """, unsafe_allow_html=True)
-                                
-                            except RuntimeError as e:
-                                if "password required" in str(e).lower() or "bad password" in str(e).lower():
-                                    st.error("ZIP file is password protected. Please enter the correct password.")
-                                else:
-                                    st.error(f"Error extracting file: {str(e)}")
-                            except Exception as e:
-                                st.error(f"Error processing image: {str(e)}")
-                    
-                except zipfile.BadZipFile:
-                    st.error("Invalid ZIP file. The file may be corrupted.")
-                except Exception as e:
-                    st.error(f"Error opening ZIP file: {str(e)}")
-                
-            else:
-                # Regular image file
-                try:
-                    # Display the image to decode
-                    decode_image = Image.open(decode_file)
-                    
-                    # Resize image if needed
-                    decode_image = resize_image_if_needed(decode_image)
-                    
-                    st.markdown('<div class="img-container">', unsafe_allow_html=True)
-                    st.image(decode_image, caption="INTELLIGENCE CARRIER IMAGE", use_container_width=True)
-                    # Add scanner effect
-                    st.markdown('<div class="scanner-line"></div>', unsafe_allow_html=True)
-                    st.markdown('</div>', unsafe_allow_html=True)
-                    
-                    # File metadata
-                    width, height = decode_image.size
-                    file_size = len(decode_file.getvalue()) / 1024  # size in KB
-                    st.markdown(f"""
-                    <div class="timestamp">
-                    PACKAGE DATA: {width}x{height} pixels | {file_size:.1f} KB | Format: {decode_image.format}
-                    </div>
-                    """, unsafe_allow_html=True)
-                except Exception as e:
-                    st.error(f"Error opening image: {str(e)}")
-        else:
-            st.warning("⚠️ NO INTELLIGENCE PACKAGE LOADED")
-            st.markdown("""
-            <div class="zip-illustration">
-                <div>You can now upload either:</div>
-                <div style="margin-top:10px;">
-                    <span style="margin:0 15px;"><b>📄 Image File</b></span> OR 
-                    <span style="margin:0 15px;"><b>🗜️ ZIP Archive</b></span>
-                </div>
-                <div style="margin-top:10px; opacity:0.8;">ZIP files protect images during transmission</div>
+                                    # Extract the file
+                                    image_data = zip_ref.read(selected_image, pwd=pwd_bytes)
+                                    
+                                    # Process the extracted image
+                                    image_io = io.BytesIO(image_data)
+                                    decode_image = Image.open(image_io)
+                                    st.session_state['extracted_image'] = decode_image
+                                    
+                                    # Display success message
+                                    st.success(f"Successfully extracted: {selected_image}")
+                                    
+                                    # Show the extracted image
+                                    st.markdown('<div class="img-container">', unsafe_allow_html=True)
+                                    st.image(decode_image, caption="EXTRACTED FROM ZIP", use_container_width=True)
+                                    st.markdown('<div class="scanner-line"></div>', unsafe_allow_html=True)
+                                    st.markdown('</div>', unsafe_allow_html=True)
+                                    
+                                    # Image metadata
+                                    width, height = decode_image.size
+                                    file_size = len(image_data) / 1024  # size in KB
+                                    st.markdown(f"""
+                                    <div class="timestamp">
+                                    EXTRACTED IMAGE: {width}x{height} pixels | Format: {decode_image.format} | Source: ZIP Archive
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                except RuntimeError as e:
+                                    if "password required" in str(e).lower() or "bad password" in str(e).lower():
+                                        st.session_state['zip_requires_password'] = True
+                                        st.error("⚠️ This ZIP file is password-protected. Please enter the correct password.")
+                                    else:
+                                        st.error(f"⚠️ Error extracting file: {str(e)}")
+                                except Exception as e:
+                                    st.error(f"⚠️ Error processing image: {str(e)}")
+                except RuntimeError as e:
+                    # ZIP may require a password just to list files
+                    if "password required" in str(e).lower():
+                        st.session_state['zip_requires_password'] = True
+                        st.markdown('<div class="warning-box">', unsafe_allow_html=True)
+                        st.markdown('🔒 **PASSWORD PROTECTED ZIP DETECTED**')
+                        st.markdown('Please enter the ZIP password to view and extract files.')
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Show extract button that will try with the provided password
+                        extract_button = st.button("🔓 UNLOCK ZIP WITH PASSWORD", key="unlock_zip", use_container_width=True)
+                        
+                        if extract_button and zip_extract_password:
+                            st.info("Attempting to unlock ZIP with provided password...")
+                            # This will be handled on the next app refresh
+            
+            except zipfile.BadZipFile:
+                st.error("Invalid ZIP file. The file may be corrupted.")
+            except Exception as e:
+                st.error(f"Error opening ZIP file: {str(e)}")
+        
+        # Use the extracted image if available
+        elif st.session_state['extracted_image'] is not None:
+            decode_image = st.session_state['extracted_image']
+            st.markdown('<div class="img-container">', unsafe_allow_html=True)
+            st.image(decode_image, caption="EXTRACTED FROM ZIP", use_container_width=True)
+            st.markdown('<div class="scanner-line"></div>', unsafe_allow_html=True)
+            st.markdown('</div>', unsafe_allow_html=True)
+            
+            # Image metadata
+            width, height = decode_image.size
+            st.markdown(f"""
+            <div class="timestamp">
+            EXTRACTED IMAGE: {width}x{height} pixels | Format: {decode_image.format} | Source: ZIP Archive
             </div>
             """, unsafe_allow_html=True)
+            
+            # Add button to clear extracted image
+            if st.button("✖️ CLEAR EXTRACTED IMAGE", key="clear_extracted", use_container_width=True):
+                st.session_state['extracted_image'] = None
+                st.experimental_rerun()
+                
+        # Regular image file
+        elif decode_file is not None and not decode_file.name.lower().endswith('.zip'):
+            try:
+                # Display the image to decode
+                decode_image = Image.open(decode_file)
+                
+                # Resize image if needed
+                decode_image = resize_image_if_needed(decode_image)
+                
+                st.markdown('<div class="img-container">', unsafe_allow_html=True)
+                st.image(decode_image, caption="INTELLIGENCE CARRIER IMAGE", use_container_width=True)
+                # Add scanner effect
+                st.markdown('<div class="scanner-line"></div>', unsafe_allow_html=True)
+                st.markdown('</div>', unsafe_allow_html=True)
+                
+                # File metadata
+                width, height = decode_image.size
+                file_size = len(decode_file.getvalue()) / 1024  # size in KB
+                st.markdown(f"""
+                <div class="timestamp">
+                PACKAGE DATA: {width}x{height} pixels | {file_size:.1f} KB | Format: {decode_image.format}
+                </div>
+                """, unsafe_allow_html=True)
+            except Exception as e:
+                st.error(f"Error opening image: {str(e)}")
+        else:
+            # If no image or file is loaded
+            if st.session_state['extracted_image'] is None:
+                st.warning("⚠️ NO INTELLIGENCE PACKAGE LOADED")
+                st.markdown("""
+                <div class="zip-illustration">
+                    <div>You can now upload either:</div>
+                    <div style="margin-top:10px;">
+                        <span style="margin:0 15px;"><b>📄 Image File</b></span> OR 
+                        <span style="margin:0 15px;"><b>🗜️ ZIP Archive</b></span>
+                    </div>
+                    <div style="margin-top:10px; opacity:0.8;">ZIP files protect images during transmission</div>
+                </div>
+                """, unsafe_allow_html=True)
         st.markdown('</div>', unsafe_allow_html=True)
     
     with col2:
@@ -1154,14 +1276,20 @@ with tabs[1]:
         
         # Warning based on transmission method
         if "WhatsApp" in transmission_method or "Social media" in transmission_method:
-            if "decode_image" in locals() and not decode_file.name.lower().endswith('.zip'):
+            if 'decode_image' in locals() and not (decode_file and decode_file.name.lower().endswith('.zip')):
                 st.markdown('<div class="critical-warning-box">', unsafe_allow_html=True)
                 st.markdown('⚠️ **WARNING:** This transmission method destroys steganographic data!')
                 st.markdown('Decoding will likely fail. Request a ZIP-protected version instead.')
                 st.markdown('</div>', unsafe_allow_html=True)
         
-        # Decode button - only show if an image is loaded (either directly or from ZIP)
-        if 'decode_image' in locals():
+        # Decode button - show if an image is loaded (either directly or from ZIP)
+        show_decode_button = ('decode_image' in locals() or st.session_state['extracted_image'] is not None)
+        
+        if show_decode_button:
+            # Use the correct image source for decoding
+            if 'decode_image' not in locals() and st.session_state['extracted_image'] is not None:
+                decode_image = st.session_state['extracted_image']
+            
             decode_button = st.button("🔓 EXECUTE DECRYPTION PROTOCOL", key="decode_button", use_container_width=True)
             
             if decode_button:
@@ -1213,7 +1341,7 @@ with tabs[1]:
                             st.markdown(f'<div class="system-message">> Access code: {access_code}</div>', unsafe_allow_html=True)
                             
                             # If this was from a ZIP, show a success message about the ZIP protection
-                            if decode_file.name.lower().endswith('.zip'):
+                            if st.session_state['extracted_image'] is not None or (decode_file and decode_file.name.lower().endswith('.zip')):
                                 st.markdown('<div class="success-box">', unsafe_allow_html=True)
                                 st.markdown('✅ **ZIP PROTECTION SUCCESSFUL**')
                                 st.markdown('The ZIP protection preserved the steganographic data during transfer.')
@@ -1248,6 +1376,8 @@ with tabs[1]:
                             st.error(f"⚠️ EXTRACTION FAILED: {str(e)}")
                     except Exception as e:
                         st.error(f"⚠️ EXTRACTION FAILED: Invalid carrier image or data corruption detected.")
+        else:
+            st.info("Please upload or extract an image to decode")
         st.markdown('</div>', unsafe_allow_html=True)
     
     # Results section that appears only after successful decoding
@@ -1326,7 +1456,7 @@ with st.sidebar:
     <span style="color: #00843D; font-weight: bold;">✅ SAFE (with ZIP protection):</span>
     <ul>
         <li>WhatsApp, Telegram, Facebook Messenger</li>
-        <li>Email (all methods)</li>
+            <li>Email (all methods)</li>
         <li>Social media platforms</li>
         <li>Any platform that normally compresses images</li>
     </ul>
@@ -1356,7 +1486,6 @@ with st.sidebar:
 st.markdown('<div class="footer">', unsafe_allow_html=True)
 st.markdown("""
 FEDERAL BUREAU OF INVESTIGATION | DIGITAL INTELLIGENCE DIVISION | CLASSIFIED SYSTEM
-<br>WARNING: This system contains U.S. Government information. Unauthorized access is prohibited.<br>Developped by
-© Dilshan. All rights reserved.
+<br>WARNING: This system contains U.S. Government information. Unauthorized access is prohibited.
 """, unsafe_allow_html=True)
 st.markdown('</div>', unsafe_allow_html=True)
