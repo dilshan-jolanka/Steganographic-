@@ -3,7 +3,6 @@ import numpy as np
 from PIL import Image
 import io
 import base64
-from stegano import lsb
 import hashlib
 import os
 from cryptography.fernet import Fernet
@@ -383,7 +382,152 @@ def decrypt_message(encrypted_data, password):
         st.error(f"Decryption failed: Incorrect password or invalid data")
         return None
 
-# Function to resize image to suitable dimensions
+# Custom LSB steganography functions
+def int_to_bin(i):
+    """Convert an integer to its binary representation as a string"""
+    return bin(i)[2:].zfill(8)
+
+def bin_to_int(binary):
+    """Convert a binary string to integer"""
+    return int(binary, 2)
+
+def text_to_binary(text):
+    """Convert text to a string of binary digits"""
+    binary = ''.join(format(ord(char), '08b') for char in text)
+    return binary
+
+def binary_to_text(binary):
+    """Convert binary digits to text"""
+    text = ''
+    for i in range(0, len(binary), 8):
+        byte = binary[i:i+8]
+        if len(byte) == 8:  # Ensure we have a complete byte
+            text += chr(int(byte, 2))
+    return text
+
+def hide_message(image, message):
+    """Hide a message in an image using LSB steganography"""
+    # Convert image to RGB mode if it's not already
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    # Convert message to binary
+    binary_message = text_to_binary(message)
+    
+    # Add message length header (32 bits = 4 bytes to store length)
+    message_length = len(binary_message)
+    length_header = format(message_length, '032b')
+    binary_data = length_header + binary_message
+    
+    # Create a copy of the image
+    encoded_image = image.copy()
+    width, height = image.size
+    
+    # Counter for binary data position
+    data_index = 0
+    
+    # Embed the binary data into the image
+    for y in range(height):
+        for x in range(width):
+            # If we've embedded all the data, break
+            if data_index >= len(binary_data):
+                break
+                
+            pixel = list(image.getpixel((x, y)))
+            
+            # Modify the least significant bit of each color channel
+            for c in range(3):  # RGB channels
+                if data_index < len(binary_data):
+                    # Replace the LSB of this color with our data bit
+                    pixel[c] = (pixel[c] & 0xFE) | int(binary_data[data_index])
+                    data_index += 1
+            
+            # Update the pixel in the new image
+            encoded_image.putpixel((x, y), tuple(pixel))
+            
+            # If we've embedded all the data, break
+            if data_index >= len(binary_data):
+                break
+        
+        # If we've embedded all the data, break
+        if data_index >= len(binary_data):
+            break
+    
+    # Check if we could fit the entire message
+    if data_index < len(binary_data):
+        raise ValueError("Image too small to hide the message")
+        
+    return encoded_image
+
+def reveal_message(image):
+    """Extract a hidden message from an image"""
+    # Convert image to RGB mode if it's not already
+    if image.mode != 'RGB':
+        image = image.convert('RGB')
+    
+    width, height = image.size
+    binary_data = ""
+    
+    # First, extract enough bits to determine the message length (first 32 bits)
+    for y in range(height):
+        for x in range(width):
+            pixel = image.getpixel((x, y))
+            
+            # Extract the LSB from each color channel
+            for c in range(3):  # RGB channels
+                binary_data += str(pixel[c] & 1)
+                
+                # Once we have 32 bits, we can determine the message length
+                if len(binary_data) == 32:
+                    break
+            
+            if len(binary_data) == 32:
+                break
+                
+        if len(binary_data) == 32:
+            break
+    
+    # Convert the first 32 bits to an integer (message length)
+    message_length = int(binary_data, 2)
+    
+    # Reset binary data to start extracting the actual message
+    binary_data = ""
+    bits_needed = message_length
+    
+    # Now extract the actual message bits
+    for y in range(height):
+        for x in range(width):
+            pixel = image.getpixel((x, y))
+            
+            # Extract the LSB from each color channel
+            for c in range(3):  # RGB channels
+                # Skip the first 32 bits (length header) when (y,x,c) = (0,0,0), (0,0,1), etc.
+                if y == 0 and x < 11:  # First 32 bits (approx. 11 pixels)
+                    if not (y == 0 and x == 0 and c == 0):  # Not the very first bit
+                        continue
+                
+                binary_data += str(pixel[c] & 1)
+                bits_needed -= 1
+                
+                # If we've extracted all the bits we need, stop
+                if bits_needed <= 0:
+                    break
+            
+            if bits_needed <= 0:
+                break
+                
+        if bits_needed <= 0:
+            break
+    
+    # Take only the bits needed for the message (discard any extra)
+    binary_message = binary_data[-message_length:]
+    
+    # Convert binary message to text
+    message = binary_to_text(binary_message)
+    
+    return message
+
+# Function to resize image if needed
 def resize_image_if_needed(image, max_dimension=800):
     """Resize image while maintaining aspect ratio if it exceeds max_dimension"""
     width, height = image.size
@@ -417,10 +561,10 @@ st.markdown('<div class="classification-banner">TOP SECRET - CONFIDENTIAL</div>'
 st.markdown('<p class="sub-header">Digital Steganography Intelligence System</p>', unsafe_allow_html=True)
 
 # Current timestamp in UTC with military format
-current_time = "2025-07-11 04:11:36"  # Using the provided timestamp
+current_time = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
 st.markdown(f"""
 <div class="user-info">
-    <span class="status-indicator status-online"></span> <b>AGENT:</b> {st.session_state['operation_id']} | <b>USER:</b> ************** | <b>UTC:</b> {current_time}Z
+    <span class="status-indicator status-online"></span> <b>AGENT:</b> {st.session_state['operation_id']} | <b>USER:</b>***************| <b>UTC:</b> {current_time}Z
     <div class="operation-id">SECURITY CLEARANCE: <span class="security-level security-top-secret">TOP SECRET</span></div>
     <div class="timestamp">CONNECTION ESTABLISHED • SECURE CHANNEL</div>
 </div>
@@ -556,8 +700,8 @@ with tabs[0]:
                     # Encrypt the message with the password
                     encrypted_message = encrypt_message(secret_message, encode_password)
                     
-                    # Use stegano to hide the encrypted message
-                    secret_image = lsb.hide(original_image, encrypted_message)
+                    # Use our custom steganography function to hide the encrypted message
+                    secret_image = hide_message(original_image, encrypted_message)
                     
                     # Generate a unique operation code
                     operation_code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=8))
@@ -602,6 +746,8 @@ with tabs[0]:
                     </div>
                     """, unsafe_allow_html=True)
                     
+                except ValueError as e:
+                    st.error(f"⚠️ OPERATION FAILED: {str(e)}")
                 except Exception as e:
                     st.error(f"⚠️ OPERATION FAILED: {str(e)}")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -697,8 +843,8 @@ with tabs[1]:
                         time.sleep(0.01)
                     
                     try:
-                        # Use stegano to reveal the encrypted message
-                        encrypted_message = lsb.reveal(decode_image)
+                        # Use our custom steganography function to reveal the encrypted message
+                        encrypted_message = reveal_message(decode_image)
                         
                         # Decrypt the message with the password
                         revealed_message = decrypt_message(encrypted_message, decode_password)
@@ -710,6 +856,8 @@ with tabs[1]:
                             # Generate a unique access code
                             access_code = ''.join(random.choices('ABCDEFGHJKLMNPQRSTUVWXYZ23456789', k=6))
                             st.markdown(f'<div class="system-message">> Access code: {access_code}</div>', unsafe_allow_html=True)
+                        else:
+                            st.error("⚠️ AUTHENTICATION FAILED: Invalid security key.")
                     except Exception as e:
                         st.error(f"⚠️ EXTRACTION FAILED: Invalid carrier image or format not recognized.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -807,9 +955,9 @@ with st.sidebar:
     st.markdown(f"""
     <div class="info-box">
     <h4>SECURE SESSION DATA</h4>
-    <div class="operation-id">OPERATOR: dilshan-jolankai</div>
+    <div class="operation-id">OPERATOR: *************</div>
     <div class="operation-id">OPERATION ID: {st.session_state['operation_id']}</div>
-    <div class="operation-id">SESSION START: 2025-07-11 04:11</div>
+    <div class="operation-id">SESSION START: {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
     <div class="operation-id">AUTHORIZATION: ACTIVE</div>
     </div>
     """, unsafe_allow_html=True)
